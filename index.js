@@ -1,39 +1,78 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
-const { Boom } = require('@hapi/boom');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
-const pino = require('pino');
+const fs = require('fs');
 
-async function connectToWhatsApp() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_bilibot');
+// --- PENGATURAN ---
+// Nanti ganti ID di bawah ini setelah lu dapet ID-nya dari terminal
+const idGrupTarget = '120363425474562327@g.us'; 
+// ------------------
 
-    const client = makeWASocket({
-        auth: state,
-        logger: pino({ level: 'silent' }),
-        browser: ['Bilibot', 'Chrome', '1.0.0'],
-        printQRInTerminal: false // Memastikan tidak error di terminal
-    });
+const client = new Client({
+    authStrategy: new LocalAuth(),
+    puppeteer: {
+        handleSIGINT: false,
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+    }
+});
 
-    client.ev.on('creds.update', saveCreds);
+client.on('qr', (qr) => {
+    qrcode.generate(qr, { small: true });
+    console.log('>>> [SCAN] Scan QR Code ini pake WhatsApp lu!');
+});
 
-    client.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        
-        // Memunculkan QR Code di log
-        if (qr) {
-            console.log('--- SCAN QR CODE INI ---');
-            qrcode.generate(qr, { small: true });
+client.on('ready', () => {
+    console.log('>>> [INFO] Bot sudah online dan siap bekerja!');
+});
+
+client.on('message', async (msg) => {
+    const chat = await msg.getChat();
+
+    // 1. Logika untuk nyari ID Grup (Muncul di terminal/command prompt)
+    if (chat.isGroup) {
+        console.log(`[LOG] Chat dari Grup: ${chat.name} | ID: ${chat.id._serialized}`);
+    }
+
+    // 2. Filter: Hanya jalan jika itu Grup DAN ID-nya cocok
+    if (chat.isGroup && chat.id._serialized === idGrupTarget) {
+        const pesan = msg.body.toLowerCase();
+
+        switch (pesan) {
+            case '!p':
+            case 'ping':
+                msg.reply('Pong! Bot standby bos.');
+                break;
+
+            case '!menu':
+                msg.reply(
+                    '--- *MENU BOT GRUP* ---\n\n' +
+                    'Ketik perintah ini:\n' +
+                    '• *!qris* - Untuk bayar\n' +
+                    '• *!info* - Informasi grup\n' +
+                    '• *!admin* - Hubungi admin'
+                );
+                break;
+
+            case '!qris':
+            case 'bayar':
+                if (fs.existsSync('./qris.png')) {
+                    const media = MessageMedia.fromFilePath('./qris.png');
+                    await client.sendMessage(msg.from, media, { 
+                        caption: 'Silakan scan QRIS di atas.\n\nJangan lupa kirim bukti transfer ya!' 
+                    });
+                } else {
+                    msg.reply('Waduh, file qris.png nggak ketemu di folder bot!');
+                }
+                break;
+
+            case '!info':
+                msg.reply('Grup ini dilindungi oleh Bot otomatis. Jangan spam ya!');
+                break;
+
+            case '!admin':
+                msg.reply('Admin bisa dihubungi di: wa.me/628123456789');
+                break;
         }
+    }
+});
 
-        if (connection === 'close') {
-            const shouldReconnect = (new Boom(lastDisconnect.error))?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) {
-                console.log('Koneksi terputus, mencoba menyambung kembali...');
-                connectToWhatsApp();
-            }
-        } else if (connection === 'open') {
-            console.log('>>> BILIBOT BERHASIL KONEK! 🚀');
-        }
-    });
-}
-
-connectToWhatsApp();
+client.initialize();
